@@ -1,0 +1,19 @@
+/* Parameter file for a 9S12DP256 project using the small
+ * memory model - ie no paging.
+ * Todd Morton, 01/05/05
+ */
+NAMES END
+
+SECTIONS
+    RAM = READ_WRITE 0x1000 TO 0x3F00; 
+    ROM_4000 = READ_ONLY  0x4000 TO 0x7FFF;
+    ROM_C000 = READ_ONLY  0xC000 TO 0xFEFF;
+END
+    
+PLACEMENT
+
+    DEFAULT_ROM         INTO  ROM_C000, ROM_4000;
+    DEFAULT_RAM         INTO  RAM;
+END
+
+STACKTOP 0x3FFF

@@ -1,0 +1,760 @@
+;*****************************************************************
+;Basic I/O - Revision 5. This version requires another low lever 
+;                        driver module for sci_open(), sci_read(),
+;                        and sci_write()
+;
+; MCU: Any CPU12 
+; Revision History:
+;     Rev1: 01/13/2005 Todd Morton
+;     Rev2: ishex fixed to work with upper-case characters.
+;     Rev3: hexstobw() fixed because Rev2 ishex broke it.
+;     Rev4: Convert to MetroWerks assembler syntax and compiler
+;           conventions.
+;     Rev5: Converted back to Rev3. Changed C prototypes in BasicIO.h
+;           instead.
+;           Also, seperated sci_open(), sci_read(), and sci_write()
+;           into a seperated module that will be MCU and/or device
+;           specific. 02/16/06 tdm
+;*****************************************************************
+; External references. From low lever driver module
+;*****************************************************************
+            XREF sci_read,sci_write,sci_open
+;*****************************************************************
+; Export to linker. Public Functions
+;*****************************************************************
+            XDEF getchar,putstrg,putchar
+            XDEF outhexb,outhexw,outdecb,outdecw
+            XDEF outcrlf,htoa,htob,btod,bwtod,hexstobw
+            XDEF decstob,getstrg,toupper,ishex,isdigit
+            XDEF slicestr
+;*****************************************************************
+; Equates
+;*****************************************************************
+NULL        equ 0       
+CR          equ $0d
+LF          equ $0a
+BS          equ $08
+SPACE       equ $20
+TAB         equ $09
+
+;*****************************************************************
+; Metrowerks section definition
+;*****************************************************************
+.text       section 
+;*****************************************************************
+; getchar() - Read input until character is received. 
+;             Returns character in ACCB.
+;Pseudo-C:
+; INT8U getchar(void){
+;     while(1){
+;         c = sci_read();
+;         if(c != 0){
+;             return c;
+;         }
+;     }
+; }
+;*****************************************************************
+getchar     jsr sci_read        ;wait for characater
+            cmpb #0
+            beq getchar
+            rts
+
+;*****************************************************************
+; putchar() - Outputs a character
+;             Character is passed in ACCB
+;             Same as sci_write()
+;Pseudo-C:
+; void putchar(INT8U c){
+;    sci_write(c);
+; }
+;*****************************************************************
+putchar     jsr sci_write
+            rts
+
+;*****************************************************************
+; putstrg() - Output string to sci.
+;    ACCD contains pointer to null terminated string
+;    Differs from standard C puts() because it does not send '\n'
+;    Returns with ACCD pointing to the byte following the NULL
+;    All other registers but CCR preserved
+; Pseudo-C:
+; INT8U *putstrg(INT8U *strg){
+;     while(*strg != NULL){
+;         putchar(*strg);
+;         strg++;
+;     }
+; }
+;*****************************************************************
+putstrg     pshx            ;preserve IX
+            tfr d,x         ;strg pointer->IX
+ps_nxt      ldab 1,x+
+            cmpb #NULL      ;put until NULL
+            beq puts_rtn
+            jsr putchar
+            bra ps_nxt
+puts_rtn    tfr x,d
+            pulx            ;recover IX
+            rts
+
+;*****************************************************************
+; outhexb() - Output one hex byte.
+;    ACCD contains pointer to byte to be sent.
+;    Returns with ACCD pointing to the next byte in memory
+;    All other registers but CCR preserved
+; Pseudo-C:
+; INT8U *outhexb(INT8U *bin){
+;     putchar(htoa(*bin >> 4));
+;     putchar(htoa(*bin & 0x0f));
+; }
+;*****************************************************************
+outhexb     pshx            ;preserve IX
+            tfr d,x         ;pointer to bin->IX
+            ldab 0,x        ;put most sig. nibble
+            lsrb
+            lsrb
+            lsrb
+            lsrb
+            jsr htoa        ;convert to ascii
+            jsr putchar
+            ldab 0,x        ;put least sig. nibble
+            andb #$0f
+            jsr htoa
+            jsr putchar
+            inx             ;point to next byte
+            tfr x,d
+            pulx            ;recover IX
+            rts
+
+;*****************************************************************
+; outhexw() - Outputs two hex bytes.
+;    ACCD contains pointer to displayed word.
+;    Returns with ACCD pointing to the next byte in memory.
+;    All other registers but CCR preserved
+;Pseudo-C:
+; INT16U *outhexw(INT16U *bin){
+;     outhexb(bin[0]);
+;     outhexb(bin[1]);
+; }
+;*****************************************************************
+outhexw     jsr outhexb
+            jsr outhexb
+            rts
+
+;*****************************************************************
+; htoa()
+; Description: Converts one binary nibble to uppercase ASCII.
+; Arguments: Nibble passed in ACCB (LCN)
+;            ASCII character returned in ACCB
+; Pseudo-C:
+; INT8U htoa(INT8U bin){
+;    if(bin <= 9){
+;        return(bin + 0x30);
+;    }else{
+;        return(bin + 0x37);
+;    }
+; }
+;*****************************************************************
+htoa        cmpb #9
+            bhi ha_alpha
+            addb #$30
+            bra ha_rtn
+ha_alpha    addb #$37
+ha_rtn      rts
+
+;*****************************************************************
+; outcrlf() - Output a carraige return and line feed.
+;    All registers but CCR preserved
+; Pseudo-C:
+; outcrlf(){
+;     putchar('\r');
+;     putchar('\n');
+; }
+;*****************************************************************
+outcrlf     pshb
+            ldab #CR
+            jsr putchar
+            ldab #LF
+            jsr putchar
+            pulb
+            rts
+;************************************************************************
+; toupper(c)
+;
+; Descritpion: A routine that converts lower-case alpha characters to 
+;              upper-case. All other characters remain unchanged.
+; Arguments: Character is passed in ACCB
+;            Return value is passed in ACCB.
+; Pseudo-C:
+; INT8U toupper(INT8U c){
+;    if('a' <= c <= 'z'){
+;        c = c - 0x20; 
+;    }
+; }
+;************************************************************************
+toupper     cmpb #'a'
+            blo tou_rtn
+            cmpb #'z'
+            bhi tou_rtn
+            subb #$20
+tou_rtn     rts
+
+;************************************************************************
+; getstrg()
+;
+; Descritpion: A routine that inputs a character string to an array
+;              until a carraige return is received or strglen is exceded.
+;              Only printable characters are recognized except carraige
+;              return and backspace.
+;              Backspace erases displayed character and array character.
+;              A NULL is always placed at the end of the string.
+;              All printable characters are echoed.
+;              Return vaule:
+;                  0 -> ended with CR
+;                  1 -> if strglen exceded.
+; Arguments: Pointer to the string array is passed in ACCD 
+;            strglen is passed on the stack. strglen includes CR/NULL.
+;            Return value is passed in ACCB.
+; Pseudo-C(MW):
+; INT8U getstrg(INT8U strglen,INT8U *strg){
+;    charnum = 0;
+;    while(c = getchar(),(c != '\r') && (charnum < (strlen-1))){
+;        if(' ' <= c <= '~'){
+;            putchar(c);
+;            *strg = c;
+;            strg++;
+;            charnum++;
+;        }else if(c = '\b' && charnum > 0){
+;            putchar('\b');
+;            putchar(' ');
+;            putchar('\b');
+;            strg--;
+;            charnum--;
+;        }
+;    }
+;    outcrlf();
+;    *strg = NULL;
+;    if(c == '\r'){
+;        return 0;
+;    }else{
+;        return 1;
+;    }
+; }
+;************************************************************************
+getstrg     pshx            ;preserve IX
+            tfr d,x         ;strlen->4,sp;  strg->IX
+            clra            ;charnum->ACCA; c->ACCB
+gs_nxt      jsr getchar     ;Character input
+            cmpb #CR        ;done if CR
+            beq gs_finish
+            cmpb #' '       ;Check if printable
+            blo gs_chkbs
+            cmpb #'~'
+            bhi gs_nxt
+            inca            ;increment charnum 
+            cmpa 4,sp       ;break out if too many chars
+            beq gs_finish
+            jsr putchar     ;echo char
+            stab 1,x+       ;store char and increment strg
+            bra gs_nxt      ;get next character
+gs_chkbs    cmpb #BS        ;Check for backspace
+            bne gs_nxt
+            tsta            ;ignore if no chars yet
+            beq gs_nxt
+            jsr putchar     ;erase displayed char
+            ldab #SPACE
+            jsr putchar
+            ldab #BS
+            jsr putchar
+            dex             ;decrement strg and charnum
+            deca
+            bra gs_nxt      ;get next character
+gs_finish   jsr outcrlf     ;echo CR
+            clr 0,x         ;place NULL at end of array
+            cmpb #CR        ;determine return value
+            bne gs_ovrfl
+            clrb            ;return 0 if CR
+            bra gs_rtn
+gs_ovrfl    ldab #1         ;return 1 if overflow
+gs_rtn      pulx            ;recover IX
+            rts
+
+;************************************************************************
+; btod()
+;
+; Description: One binary byte is converted to three unpacked digits
+;              in bcd[] (bcd2:bcd1:bcd0).
+; Arguments: Binary byte is passed on the stack.
+;            Address of bcd[0] is passed in ACCB.
+; Pseudo-C:
+; void btod(INT8U bin, INT8U *bcd){
+;     bcd[2] = bin%10;
+;     bin = bin/10;
+;     bcd[1] = bin%10;
+;     bcd[0] = bin/10;
+; }
+;************************************************************************
+btod        pshy        ;preserve IY, IX and ACCA
+            pshx 
+            psha
+            ldy 7,sp    ;Array pointer -> IY 
+            clra
+            ldx #10     ;divide bin by 10
+            idiv
+            stab 2,y    ;remainder = bcd0
+            tfr x,d     ;divide quotient by 10
+            ldx #10
+            idiv
+            stab 1,y    ;remainder = bcd1
+            tfr x,d
+            stab 0,y    ;quotient = bcd2
+            pula        ;recover IY, IX and ACCA
+            pulx
+            puly
+            rts
+
+;************************************************************************
+; bwtod()
+;
+; Description: 16-bit word is converted to five unpacked digits
+;              in bcd[],(bcd4:bcd3:bcd2:bcd1:bcd0).
+; Arguments: Binary word is passed on the stack.
+;            Address of bcd[0] is passed in ACCD.
+; Pseudo-C:
+; bwtod(INT16U bin, INT8U *bcd){
+;     bcd[4] = bin%10;
+;     bin = bin/10;
+;     bcd[3] = bin%10;
+;     bin = bin/10;
+;     bcd[2] = bin%10;
+;     bin = bin/10;
+;     bcd[1] = bin%10;
+;     bcd[0] = bin/10;
+; }
+;************************************************************************
+bwtod       pshy        ;preserve IY and IX
+            pshx
+            ldy #0
+            ldx #10     ;divide bin by 10
+            ediv
+            ldx 6,sp    ;IX points to bcd array
+            stab 4,x    ;remainder = bcd0
+            tfr y,d     ;divide quotient by 10
+            ldy #0
+            ldx #10
+            ediv
+            ldx 6,sp    ;remainder = bcd1
+            stab 3,x
+            tfr y,d     ;divide quotient by 10
+            ldy #0
+            ldx #10
+            ediv
+            ldx 6,sp    ;remainder = bcd2
+            stab 2,x
+            tfr y,d     ;divide quotient by 10
+            ldx #10
+            idiv
+            ldy 6,sp    ;IY points to bcd array
+            stab 1,y    ;remainder = bcd3
+            tfr x,d
+            stab 0,y    ;quotient = bcd4
+            pulx        ;recover IY and IX
+            puly
+            rts
+
+;************************************************************************
+; outdecb()
+;
+; Descritpion: A routine that outputs the decimal value of one byte. 
+; Arguments: Pointer to byte is passed in ACCD
+;
+; Pseudo-C:
+; void outdecb(INT8U *bin){
+;     bcd[] = btod(*bin);
+;     i = 0;
+;     while(bcd[i] == 0 && i < 2){
+;         i++;
+;     }
+;     while(i < 3){
+;         putchar(bcd[i] + 0x30);
+;         i++;
+;     }
+; }
+;*****************************************************************
+outdecb     pshx            ;preserve IX
+            leas -3,sp      ;allocate space for BCD digits
+            tfr d,x         ;get binary byte
+            ldab 0,x
+            tfr sp,x        ;convert bin to BCD
+            pshx
+            jsr btod
+            leas 2,sp
+            ldaa #0
+odb_lp1     cmpa #2         ;ignore leading zeros
+            bhs odb_lp2
+            ldab A,sp       
+            bne odb_lp2
+            inca
+            bra odb_lp1
+odb_lp2     cmpa #3         ;convert bcd[i] to ascii and put
+            bhs odb_finlp
+            ldab A,sp       
+            addb #$30
+            jsr putchar
+            inca
+            bra odb_lp2
+odb_finlp   leas 3,sp       ;deallocate BCD space
+            pulx            ;recover IX
+            rts
+
+;************************************************************************
+; outdecw()
+;
+; Descritpion: A routine that outputs the decimal value of a 16-bit word.
+; Arguments: Pointer to word is passed in ACCD
+;
+; Pseudo-C:
+; void outdecw(INT16U *bin){
+;     bcd[] = bwtod(*bin);
+;     i = 0;
+;     while(bcd[i] == 0 && i < 4){
+;         i++;
+;     }
+;     while(i<5){
+;         putchar(bcd[i] + 0x30);
+;         i++;
+;     }
+; }
+;*****************************************************************
+outdecw     pshx                ;preserve IX
+            leas -5,sp          ;allocate space for BCD digits
+            tfr d,x             ;get binary word
+            ldd 0,x
+            tfr sp,x            ;convert bin to BCD
+            pshx
+            jsr bwtod
+            leas 2,sp
+            ldaa #0
+odw_lp1     cmpa #4             ;ignore leading zeros
+            bhs odw_lp2
+            ldab A,sp           
+            bne odw_lp2
+            inca
+            bra odw_lp1
+odw_lp2     cmpa #5             ;convert bcd[i] to ascii and put
+            bhs odw_finlp
+            ldab A,sp           
+            addb #$30
+            jsr putchar
+            inca
+            bra odw_lp2
+odw_finlp   leas 5,sp           ;dealocate BCD space
+            pulx                ;recover IX
+            rts
+
+;************************************************************************
+; ishex(c)
+;
+; Descritpion: A routine the check if an ASCII character is an
+;              hexidecimal character (0..9),(a..f) or (A..F).
+; Arguments: Character is passed in ACCB
+;            Return value is passed in ACCB and Z bit of CCR.
+;
+; Pseudo-C:
+; INT8U ishex(INT8U c){
+;    if(('0' <= c <= '9') || ('A' <= c <= 'F') || ('a' <= c <= 'f')){
+;        return 1;
+;    }else{
+;        return 0;
+; }
+;
+;************************************************************************
+ishex       cmpb #'0'           ;Check if between '0' and '9'
+            blo isnoth
+            cmpb #'9'
+            bls ish
+            cmpb #'A'           ;check if between 'A' and 'F'
+            blo isnoth
+            cmpb #'F'
+            bls ish
+            cmpb #'a'           ;check if between 'a' and 'f'
+            blo isnoth
+            cmpb #'f'
+            bls ish
+isnoth      clrb                ;Not hex, return 0
+            bra ish_rtn
+ish         ldab #1             ;is hex, return 1
+ish_rtn     rts
+
+;************************************************************************
+; htob(c)
+;
+; Descritpion: A routine converts an ASCII hex character to binary. 
+;              Assumes a legal hex character.(run ishex() first)
+; Arguments: The ASCII digit is passed in ACCB.
+;            Returns the binary nibble in ACCB. 
+; Pseudo-C:
+; INT8U htob(INT8U c){
+;    if('0' <= c <= '9') {
+;        bin = c - '0';
+;    }else if('a' <= c <= 'f'){
+;        bin = c - 'a';
+;    }else if('A' <= c <= 'F'){
+;        bin = c - 'A';
+;    }
+;    return bin;
+; }
+;************************************************************************
+htob        cmpb #'0'       ;is digit?
+            blo hb_rtn
+            cmpb #'9'
+            bhi hb_lw
+            subb #'0'       ;subtract $30
+            bra hb_rtn
+hb_lw       cmpb #'A'       ;is uppercase hex?
+            blo hb_rtn
+            cmpb #'F'
+            bhi hb_up
+            subb #$37       ;subtract $37
+            bra hb_rtn
+hb_up       cmpb #'a'       ;is lowercase hex?
+            blo hb_rtn
+            cmpb #'f'
+            bhi hb_rtn
+            subb #$57       ;subtract $57
+hb_rtn      rts
+
+;************************************************************************
+; hexstobw()
+;
+; Descritpion: A routine that converts a string to a hex 16-bit word 
+;              until whitespace or NULL is encountered.
+; Arguments: Pointer to the string is passed on the stack
+;            Pointer to binary word is passed in ACCD
+;            Error code is returned in ACCB
+;              0 -> No Error
+;              1 -> Too large
+;              2 -> Non-hex character
+; Pseudo-C:
+; INT8U hexstobw(INT8U *strg,INT16U *bin){
+;     cnt = 0;
+;     *bin = 0;
+;     while(*strg != NULL || *strg != ' ' || *strg != '\t'){
+;         if(ishex(*strg)){
+;             *bin = (*bin << 4) | htob(*strg);
+;         }else{
+;             return 2;
+;         }
+;         strg++;
+;         cnt++;
+;         if(cnt > 4){
+;             return 1;
+;         }
+;     }
+;     return 0;
+; }
+;*****************************************************************
+hexstobw    pshx            ;preserve IX
+            tfr d,x         ;string pointer -> IX
+            leas -2,sp      ;cnt->1,sp; tmpc->0,sp
+            clr 1,sp        ;clear cnt
+            ldd #0
+            std [6,sp]      ;clr binary number
+sh_lp       ldab 1,x+       ;get next character
+            stab 0,sp       ;save for later
+            cmpb #NULL      ;finish if NULL, space, or tab.
+            beq sh_finlp
+            cmpb #' '
+            beq sh_finlp
+            cmpb #TAB
+            beq sh_finlp
+            jsr ishex       ;check for legal hex digit
+            beq err2        ;if not return error 2
+            ldab 0,sp
+            jsr htob        ;convert ascii hex to binary
+            stab 0,sp   
+            ldd [6,sp]      ;pack binary nibble into bin
+            lsld
+            lsld
+            lsld
+            lsld
+            orab 0,sp
+            std [6,sp]
+            inc 1,sp        ;check if four digits done
+            ldab 1,sp
+            cmpb #4
+            bhi err1        ;error 1 if too many chars
+            bra sh_lp
+sh_finlp    clrb            ;return 0
+            bra sh_rtn
+err1        ldab #1
+            bra sh_rtn
+err2        ldab #2
+sh_rtn      leas 2,sp       ;reallocate stack
+            pulx            ;recover IX
+            rts
+;*****************************************************************
+; decstob()
+;
+; Descritpion: A routine that converts a string of decimal
+;              characters to a binary byte until a CR, whitespace 
+;              or a NULL is encountered.
+; Arguments: Pointer to the string is passed on the stack
+;            Pointer to binary byte is passed in ACCD
+;            Error code is returned in ACCB
+;              0 -> No Error
+;              1 -> Non-decimal character
+;              2 -> Too large
+;
+; Pseudo-C:
+; INT8U decstob(INT8U *strg,INT8U *bin){
+;     if(isdigit(*strg)){
+;         *bin = (*strg - 0x30);
+;     }else if(*strg == NULL){
+;         return 0;
+;     }else{
+;         return 1;
+;     }
+;     strg++;
+;     while(*strg != NULL || *strg != ' ' || *strg != '\t'){
+;         if(isdigit(*strg)){
+;             *bin = *bin * 10 + (*strg - 0x30);
+;              if(*bin > 255){
+;                  return 2;
+;              }
+;         }else{
+;             return 1;
+;         }
+;         strg++;
+;     }
+;     return 0;
+; }
+;*****************************************************************
+decstob     pshx            ;preserve IX
+            tfr d,x         ;strg pointer->IX
+            clr [4,sp]      ;clear bin
+            ldab 0,x        ;get first digit
+            cmpb #NULL      ;if NULL done
+            beq dsb_finlp
+            jsr isdigit     ;if not digit error 1
+            cmpb #0
+            beq dsb_err1
+            ldab 0,x
+            subb #$30       ;convert char to binary
+            stab [4,sp]     
+            inx             ;point to next char
+dsb_lp      ldab 0,x
+            cmpb #NULL      ;finished if NULL or whitespace
+            beq dsb_finlp
+            cmpb #' '
+            beq dsb_finlp
+            cmpb #TAB
+            beq dsb_finlp
+            jsr isdigit     ;error if not digit
+            beq dsb_err1
+            ldab [4,sp]     ;bin*10+bcdx
+            ldaa #10
+            mul
+            tsta            ;check for overflow
+            bne dsb_err2
+            ldaa 0,x
+            suba #$30       ;convert net digit to bcd
+            aba 
+            bcs dsb_err2    ;check for overflow
+            staa [4,sp]
+            inx             ;point to next digit
+            bra dsb_lp
+dsb_finlp   clrb            ;done no error
+            bra dsb_rtn
+dsb_err1    ldab #1         ;non-digit error
+            bra dsb_rtn
+dsb_err2    ldab #2         ;too-large error
+dsb_rtn     pulx            ;recover IX
+            rts
+
+;*****************************************************************
+; isdigit(c)
+;
+; Descritpion: A routine the check if an ASCII character is a 
+;              digit (0-9).
+; Arguments: Character is passed in ACCB
+;            Return value is passed in ACCB and Z bit of CCR.
+; Pseudo-C:
+; INT8U isdigit(c){
+;    if('0'<= c <= '9'){
+;        return 1;
+;    else
+;        return 0;
+; }
+;*****************************************************************
+isdigit     cmpb #'0'
+            blo isd_not
+isd_9       cmpb #'9'
+            bhi isd_not
+            ldab #1
+            bra isd_rtn
+isd_not     clrb
+isd_rtn     rts
+
+;*****************************************************************
+; slicestrg()
+;
+; Descritpion: A routine that slices a delimited token from a
+;              string to make it a substring. Whitespace
+;              (tabs and space) are used as delimiters. The first
+;              whitespace character after a token is replaced by a 
+;              NULL.
+; Arguments: Pointer to string to be sliced is passed in ACCD
+;            Pointer to be set to point to the substring is passed
+;            on the stack 
+;            Return value is a pointer to the character following
+;            the inserted NULL or zero (a NULL pointer) if no
+;            token is found before a NULL.
+; Pseudo-C:
+; INT8U *slicestrg(INT8U **substr,INT8U *str){
+;     while(*str == '\t' || *str == ' '){
+;         if(*str == 'NULL'){
+;             return *0;
+;         }
+;         str++;
+;     }
+;     *substr = str;
+;     str++;
+;     while(*str != '\t' && *str != ' ' && *str != NULL){
+;         str++
+;     }
+;     *str = NULL;
+;     str++;
+;     return str;
+; }
+;*****************************************************************
+slicestr    pshx            ;preserve IX
+            tfr d,x         ;str->IX
+ss_wslp     ldab 0,x        ;ignore leading whitespace
+            cmpb #TAB
+            beq ss_nc
+            cmpb #' '
+            beq ss_nc
+            cmpb #NULL
+            bne ss_tk       ;token found
+            ldd #0          ;no token return 0
+            bra ss_rtn
+ss_nc       inx             ;check next char
+            bra ss_wslp
+ss_tk       stx [4,sp]      ;save pointer to token in substr
+            inx             ;find end of token(whitespace)
+ss_tklp     ldab 0,x
+            cmpb #TAB
+            beq ss_endtk
+            cmpb #' '
+            beq ss_endtk
+            cmpb #NULL
+            beq ss_endtk
+            inx
+            bra ss_tklp
+ss_endtk    clrb            ;end token with NULL(substring)
+            stab 0,x
+            inx             ;point to next char after NULL
+            tfr x,d         ;return current string pointer
+ss_rtn      pulx            ;recover IX
+            rts
+;*****************************************************************

@@ -1,0 +1,79 @@
+;*****************************************************************
+;Basic I/O Low-level driver routines. For use with BasicIO module.
+;
+; MCU: 9S12DP512,9S12DP256,9S12DG128 SCI0
+; Revision History:
+;     Rev1:08/10/2006 Todd Morton
+;     Rev2: 02/05/2013 TDM added sci_open_int() and added dummy
+;                          to sci_open() to clear RDRF and OR,
+;                          just in case.
+;*****************************************************************
+; Export to linker. Public Functions
+;*****************************************************************
+            XDEF sci_read,sci_write,sci_open,sci_open_int
+;*****************************************************************
+; Equates
+;*****************************************************************
+NULL        equ 0       
+CR          equ $0d
+LF          equ $0a
+BS          equ $08
+SPACE       equ $20
+TAB         equ $09
+TDRE        equ $80
+RDRF        equ $20
+SCI0BDH     equ $c8
+SCI0BDL     equ $c9
+SCI0CR1     equ $ca
+SCI0CR2     equ $cb
+SCI0SR1     equ $cc
+SCI0SR2     equ $cd
+SCI0DRH     equ $ce
+SCI0DRL     equ $cf
+;*****************************************************************
+; Metrowerks section definition
+;*****************************************************************
+.text       section 
+;*****************************************************************
+; sci_open() - Initializes SCI0.
+;    Normal 8-bit mode, 9600bps,no interrupts
+;       -Assumes 24MHz Eclk
+;    All registers preserved except CCR.
+; 02/05/2013 TDM Added dummy reads to clear out flags and register
+;                just in case RDRF or OR flags are set
+;*****************************************************************
+sci_open    movw #156,SCI0BDH            ;9600bps @ 24MHz Eclk
+            movb #$00,SCI0CR1           ;Normal 8-bit Mode
+            movb #$0C,SCI0CR2           ;No ints, no parity
+            ldab SCI0SR1                ;dummy reads to clear
+            ldab SCI0DRL                ;RDRF and OR flags
+            rts
+;*****************************************************************
+; sci_open_int() - Initializes SCI0 for interrupt driven Rxd.
+;    Normal 8-bit mode, 9600bps,no interrupts
+;       -Assumes 24MHz Eclk
+; 02/05/2013 TDM Created
+;*****************************************************************
+sci_open_int movw #156,SCI0BDH            ;9600bps @ 24MHz Eclk
+            movb #$00,SCI0CR1           ;Normal 8-bit Mode
+            movb #$2C,SCI0CR2           ;RxD ints, no parity
+            ldab SCI0SR1                ;dummy reads to clear
+            ldab SCI0DRL                ;RDRF and OR flags
+            rts
+;*****************************************************************
+; sci_read() - Read sci. 
+;   Returns ACCB=char or 0 if not character received.
+;*****************************************************************
+sci_read        clrb
+                brclr SCI0SR1,RDRF,sci_read_rtn  ; get status
+                ldab SCI0DRL                     ; get data
+sci_read_rtn    rts
+;*****************************************************************
+; sci_write() - write to sci.
+;   Outputs the value passed in ACCB.
+;   Blocks as long as 1 character time.
+;*****************************************************************
+sci_write       brclr SCI0SR1,TDRE,sci_write   ; wait for TDRE
+                stab SCI0DRL                   ; send data
+                rts
+;*****************************************************************

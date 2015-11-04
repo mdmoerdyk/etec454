@@ -1,0 +1,68 @@
+;*************************************************************************
+; Interrupt vectors
+;    -Import all ISR names and replace __exit in the appropriate vector
+;*************************************************************************
+		XREF _Startup, OSTickISR, OSCtxSw
+        
+__exit  sei                 ; mask interrupts
+loop    bra loop            ; and loop forever
+        
+        org $ff8c
+__vec8C dc.w __exit;   // PWM Emergency Shutdown
+__vec8E dc.w __exit;   // Port P Interrupt
+__vec90 dc.w __exit;   // CAN4 Transmit
+__vec92 dc.w __exit;   // CAN4 Receive
+__vec94 dc.w __exit;   // CAN4 Errors
+__vec96 dc.w __exit;   // CAN4 Wakeup
+__vec98 dc.w __exit;   // CAN3 Transmit
+__vec9A dc.w __exit;   // CAN3 Receive
+__vec9C dc.w __exit;   // CAN3 Errors
+__vec9E dc.w __exit;   // CAN3 Wakeup
+__vecA0 dc.w __exit;   // CAN2 Transmit
+__vecA2 dc.w __exit;   // CAN2 Receive
+__vecA4 dc.w __exit;   // CAN2 Errors
+__vecA6 dc.w __exit;   // CAN2 Wakeup
+__vecA8 dc.w __exit;   // CAN1 Transmit
+__vecAA dc.w __exit;   // CAN1 Receive
+__vecAC dc.w __exit;   // CAN1 Errors
+__vecAE dc.w __exit;   // CAN1 Wakeup
+__vecB0 dc.w __exit;   // CAN0 Transmit
+__vecB2 dc.w __exit;   // CAN0 Receive
+__vecB4 dc.w __exit;   // CAN0 Errors
+__vecB6 dc.w __exit;   // CAN0 Wakeup
+__vecB8 dc.w __exit;   // FLASH
+__vecBA dc.w __exit;   // EEPROM
+__vecBC dc.w __exit;   // SPI2
+__vecBE dc.w __exit;   // SPI1
+__vecC0 dc.w __exit;   // IIC Bus
+__vecC2 dc.w __exit;   // BDLC
+__vecC4 dc.w __exit;   // CRG Self Clock Mode
+__vecC6 dc.w __exit;   // CRG PLL Lock
+__vecC8 dc.w __exit;   // Pulse Accumulator B Overflow
+__vecCA dc.w __exit;   // Mod. Down Counter Underflow
+__vecCC dc.w __exit;   // Port H Key wakeup
+__vecCE dc.w __exit;   // Port J Key wakeup
+__vecD0 dc.w __exit;   // ATD1
+__vecD2 dc.w __exit;   // ATD0
+__vecD4 dc.w __exit;   // SCI1
+__vecD6 dc.w __exit;   // SCI0
+__vecD8 dc.w __exit;   // SPI0 Serial Transfer Complete
+__vecDA dc.w __exit;   // Pulse Accumulator Input Edge
+__vecDC dc.w __exit;   // Pulse Accumulator A Overflow
+__vecDE dc.w __exit;   // Timer Overflow
+__vecE0 dc.w __exit;   // Timer Channel 7
+__vecE2 dc.w OSTickISR;   // Timer Channel 6
+__vecE4 dc.w __exit;   // Timer Channel 5
+__vecE6 dc.w __exit;   // Timer Channel 4
+__vecE8 dc.w __exit;   // Timer Channel 3
+__vecEA dc.w __exit;   // Timer Channel 2
+__vecEC dc.w __exit;   // Timer Channel 1
+__vecEE dc.w __exit;   // Timer Channel 0
+__vecF0 dc.w __exit;   // Real Time Interrupt
+__vecF2 dc.w __exit;   // IRQ (or Key Wake Up D)
+__vecF4 dc.w __exit;   // XIRQ
+__vecF6 dc.w OSCtxSw;   // SWI
+__vecF8 dc.w __exit;   // Illegal Opcode Trap
+__vecFA dc.w __exit;   // COP Failure (Reset)
+__vecFC dc.w __exit;   // COP Clock Monitor Fail (Reset)
+__vecFE dc.w _Startup;  // Reset
